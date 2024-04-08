@@ -2,10 +2,10 @@
 use std::{collections::BTreeMap, error::Error};
 
 use crate::{
-    ast::{NodeID, NodeType},
+    ast::NodeID,
     capture,
     context::{
-        browser::GetClosestParentOfTypeX,
+        browser::{GetAncestralLine, SortNodeReferencesToSequence},
         workspace_context::{ASTNode, WorkspaceContext},
     },
     detect::detector::{IssueDetector, IssueDetectorNamePool, IssueSeverity},
@@ -13,7 +13,7 @@ use crate::{
 use eyre::Result;
 
 #[derive(Default)]
-pub struct ClosestParentDemonstrator {
+pub struct AncestralLineDemonstrator {
     // Keys are source file name and line number
     found_instances: BTreeMap<(String, usize, String), NodeID>,
 }
@@ -23,27 +23,27 @@ pub struct ClosestParentDemonstrator {
 In ParentChainContract.sol, there is only 1 assignment done. The goal is to capture it first, second and third parent
 */
 
-impl IssueDetector for ClosestParentDemonstrator {
+impl IssueDetector for AncestralLineDemonstrator {
     fn detect(&mut self, context: &WorkspaceContext) -> Result<bool, Box<dyn Error>> {
         for assignment in context.assignments() {
             capture!(self, context, assignment);
 
-            if let Some(ASTNode::Block(block)) =
-                assignment.closest_parent_of_type(context, NodeType::Block)
-            {
-                capture!(self, context, block);
-            }
-
-            if let Some(for_statement) =
-                assignment.closest_parent_of_type(context, NodeType::ForStatement)
-            {
-                capture!(self, context, for_statement);
-
-                if let Some(ASTNode::Block(block)) =
-                    for_statement.closest_parent_of_type(context, NodeType::Block)
-                {
+            if let Some(parent_chain) = assignment.ancestral_line(context) {
+                if let ASTNode::Block(_) = parent_chain[1] {
+                    capture!(self, context, parent_chain[1]);
+                }
+                if let ASTNode::ForStatement(_) = parent_chain[2] {
+                    capture!(self, context, parent_chain[2]);
+                }
+                if let ASTNode::Block(block) = parent_chain[3] {
                     capture!(self, context, block);
                 }
+            }
+
+            if let Some(mut parent_chain) = assignment.ancestral_line(context) {
+                let sorted_chain = parent_chain.sort_by_src_position(context).unwrap();
+                parent_chain.reverse();
+                assert_eq!(sorted_chain, parent_chain);
             }
         }
 
@@ -55,11 +55,11 @@ impl IssueDetector for ClosestParentDemonstrator {
     }
 
     fn title(&self) -> String {
-        String::from("Closest Parent Demonstrator")
+        String::from("Parent Chain Demonstration")
     }
 
     fn description(&self) -> String {
-        String::from("Closest Parent Demonstrator")
+        String::from("Parent Chain Demonstration")
     }
 
     fn instances(&self) -> BTreeMap<(String, usize, String), NodeID> {
@@ -72,19 +72,19 @@ impl IssueDetector for ClosestParentDemonstrator {
 }
 
 #[cfg(test)]
-mod parent_chain_demo_tests {
+mod ancestral_line_demo_tests {
     use crate::detect::{
         detector::{detector_test_helpers::load_contract, IssueDetector},
-        experimental::closest_parent::ClosestParentDemonstrator,
+        experimental::ancestral_line::AncestralLineDemonstrator,
     };
 
     #[test]
-    fn test_closest_parent() {
+    fn test_ancestral_line_demo() {
         let context = load_contract(
             "../tests/contract-playground/out/ParentChainContract.sol/ParentChainContract.json",
         );
 
-        let mut detector = ClosestParentDemonstrator::default();
+        let mut detector = AncestralLineDemonstrator::default();
         let found = detector.detect(&context).unwrap();
         assert!(found);
 
